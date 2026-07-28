@@ -119,8 +119,8 @@ export async function runAgentLoop(
   // In local mode with $0 on-chain USDC, this lets the agent still think (floor at
   // low_compute) so it can seek revenue instead of going critical and freezing.
   const hasInferenceProvider =
-    !!config.openrouterApiKey || !!config.openaiApiKey || !!config.anthropicApiKey || !!config.ollamaBaseUrl ||
-    !!process.env.OPENROUTER_API_KEY || !!process.env.OPENAI_API_KEY || !!process.env.ANTHROPIC_API_KEY || !!process.env.OLLAMA_BASE_URL;
+    !!config.openrouterApiKey || !!config.openaiApiKey || !!config.anthropicApiKey || !!config.ollamaBaseUrl || !!config.geminiApiKey ||
+    !!process.env.OPENROUTER_API_KEY || !!process.env.OPENAI_API_KEY || !!process.env.ANTHROPIC_API_KEY || !!process.env.OLLAMA_BASE_URL || !!process.env.GEMINI_API_KEY;
 
   // Initialize inference router (Phase 2.3)
   const modelStrategyConfig: ModelStrategyConfig = {
@@ -619,7 +619,25 @@ export async function runAgentLoop(
       const survivalTier = getRealSurvivalTier(financial.usdcBalance, isSimulatedCredit, financial.creditsCents, hasInferenceProvider);
       log(config, `[THINK] Routing inference (tier: ${survivalTier}, model: ${inference.getDefaultModel()})...`);
 
-      const inferenceTools = toolsToInferenceFormat(tools);
+      // Token economy: on low_compute/critical tiers, send only the essential
+      // tools' schema (cuts ~80% of tool-schema tokens). The compact text list
+      // in the system prompt still names all tools; the model just can't CALL
+      // the non-essential ones this turn (appropriate when conserving).
+      // Also: in local mode, drop orchestration/replication/registry tools
+      // (they need Conway Cloud VMs and aren't usable on Termux) to save tokens.
+      const ESSENTIAL_TOOLS = new Set([
+        "exec", "web_fetch", "web_search", "write_file", "read_file",
+        "check_usdc_balance", "check_credits", "sleep", "topup_credits",
+      ]);
+      const LOCAL_UNUSED_CATEGORIES = new Set(["orchestration", "replication", "registry"]);
+      let toolsForTurn = tools;
+      if (isSimulatedCredit) {
+        toolsForTurn = tools.filter((t) => !LOCAL_UNUSED_CATEGORIES.has(t.category));
+      }
+      if (survivalTier === "low_compute" || survivalTier === "critical") {
+        toolsForTurn = toolsForTurn.filter((t) => ESSENTIAL_TOOLS.has(t.name));
+      }
+      const inferenceTools = toolsToInferenceFormat(toolsForTurn);
       const routerResult = await inferenceRouter.route(
         {
           messages: messages,

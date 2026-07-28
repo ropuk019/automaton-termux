@@ -29,11 +29,13 @@ interface InferenceClientOptions {
   ollamaBaseUrl?: string;
   /** OpenRouter API key (sk-or-...). One key reaches many real frontier models. */
   openrouterApiKey?: string;
+  /** Google AI Studio (Gemini) API key. Free tier: 1,500 req/day, 1M context, no credit card. */
+  geminiApiKey?: string;
   /** Optional registry lookup — if provided, used before name heuristics */
   getModelProvider?: (modelId: string) => string | undefined;
 }
 
-type InferenceBackend = "conway" | "openai" | "anthropic" | "ollama" | "openrouter";
+type InferenceBackend = "conway" | "openai" | "anthropic" | "ollama" | "openrouter" | "gemini";
 
 function isLoopbackHttpUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -50,7 +52,7 @@ function isLoopbackHttpUrl(url: string | undefined): boolean {
 export function createInferenceClient(
   options: InferenceClientOptions,
 ): InferenceClient {
-  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, ollamaBaseUrl, openrouterApiKey, getModelProvider } = options;
+  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, ollamaBaseUrl, openrouterApiKey, geminiApiKey, getModelProvider } = options;
   const httpClient = new ResilientHttpClient({
     baseTimeout: INFERENCE_TIMEOUT_MS,
     retryableStatuses: [429, 500, 502, 503, 504],
@@ -71,14 +73,15 @@ export function createInferenceClient(
       anthropicApiKey,
       ollamaBaseUrl,
       openrouterApiKey,
+      geminiApiKey,
       getModelProvider,
     });
 
     // Newer models (o-series, gpt-5.x, gpt-4.1) require max_completion_tokens.
-    // Ollama always uses max_tokens. OpenRouter is OpenAI-compatible and accepts
-    // max_tokens for most models (provider-specific handling is on OpenRouter).
+    // Ollama always uses max_tokens. OpenRouter/Gemini are OpenAI-compatible and
+    // accept max_tokens.
     const usesCompletionTokens =
-      backend !== "ollama" && backend !== "openrouter" && /^(o[1-9]|gpt-5|gpt-4\.1)/.test(model);
+      backend !== "ollama" && backend !== "openrouter" && backend !== "gemini" && /^(o[1-9]|gpt-5|gpt-4\.1)/.test(model);
     const tokenLimit = opts?.maxTokens || maxTokens;
 
     const body: Record<string, unknown> = {
@@ -118,11 +121,13 @@ export function createInferenceClient(
       backend === "openai" ? "https://api.openai.com" :
       backend === "ollama" ? (ollamaBaseUrl as string).replace(/\/$/, "") :
       backend === "openrouter" ? "https://openrouter.ai" :
+      backend === "gemini" ? "https://generativelanguage.googleapis.com/v1beta/openai" :
       apiUrl;
     const openAiLikeApiKey =
       backend === "openai" ? (openaiApiKey as string) :
       backend === "ollama" ? "ollama" :
       backend === "openrouter" ? (openrouterApiKey as string) :
+      backend === "gemini" ? (geminiApiKey as string) :
       apiKey;
 
     // 402-aware retry: if the provider returns 402 (insufficient credits), retry
@@ -230,6 +235,7 @@ function resolveInferenceBackend(
     anthropicApiKey?: string;
     ollamaBaseUrl?: string;
     openrouterApiKey?: string;
+    geminiApiKey?: string;
     getModelProvider?: (modelId: string) => string | undefined;
   },
 ): InferenceBackend {
@@ -240,9 +246,10 @@ function resolveInferenceBackend(
     if (provider === "anthropic" && keys.anthropicApiKey) return "anthropic";
     if (provider === "openai" && keys.openaiApiKey) return "openai";
     if (provider === "openrouter" && keys.openrouterApiKey) return "openrouter";
+    if (provider === "gemini" && keys.geminiApiKey) return "gemini";
     if (provider === "conway") {
       // Local-mode preference: when there's no Conway key, "conway" routing
-      // is impossible. Fall through to heuristics so an Ollama/OpenAI/OpenRouter
+      // is impossible. Fall through to heuristics so an Ollama/OpenAI/OpenRouter/Gemini
       // backend can serve the request instead of returning a 401.
       // (Fall through — do not return "conway" here.)
     } else {
@@ -251,6 +258,8 @@ function resolveInferenceBackend(
   }
 
   // Heuristic fallback (model not in registry, or local mode)
+  // Gemini model IDs start with "gemini-" (e.g. gemini-2.0-flash, gemini-flash-lite)
+  if (keys.geminiApiKey && /^gemini/i.test(model)) return "gemini";
   // OpenRouter model IDs use a "vendor/model" slug, e.g.
   //   "anthropic/claude-3.5-sonnet", "openai/gpt-4o", "meta-llama/llama-3.3-70b-instruct"
   if (keys.openrouterApiKey && /^[a-z0-9-]+\/[a-z0-9._-]+$/i.test(model)) return "openrouter";
@@ -259,8 +268,8 @@ function resolveInferenceBackend(
   // Ollama model names typically contain a colon (e.g. "llama3.1:8b") or are
   // known Ollama tags. Prefer Ollama when its base URL is configured.
   if (keys.ollamaBaseUrl && /:|llama|qwen|mistral|phi|gemma|deepseek/i.test(model)) return "ollama";
-  // Last resort: OpenRouter if available (reaches many real models with one key),
-  // else Ollama if available (local mode), else Conway.
+  // Last resort: Gemini (free 1500/day) if available, else OpenRouter, else Ollama, else Conway.
+  if (keys.geminiApiKey) return "gemini";
   if (keys.openrouterApiKey) return "openrouter";
   if (keys.ollamaBaseUrl) return "ollama";
   return "conway";
@@ -272,22 +281,25 @@ async function chatViaOpenAiCompatible(params: {
   body: Record<string, unknown>;
   apiUrl: string;
   apiKey: string;
-  backend: "conway" | "openai" | "ollama" | "openrouter";
+  backend: "conway" | "openai" | "ollama" | "openrouter" | "gemini";
   httpClient: ResilientHttpClient;
 }): Promise<InferenceResponse> {
-  // OpenRouter's endpoint is /api/v1/chat/completions (not /v1/...). Conway and
-  // OpenAI use /v1/chat/completions. Ollama uses /v1/chat/completions off its base.
-  // Build the full URL per-backend to avoid path-mismatch 404s.
+  // Per-backend endpoint paths:
+  //   OpenRouter: /api/v1/chat/completions
+  //   Gemini (OpenAI-compat): /chat/completions  (base already includes /v1beta/openai)
+  //   Conway/OpenAI/Ollama: /v1/chat/completions
   const endpoint =
     params.backend === "openrouter"
       ? `${params.apiUrl}/api/v1/chat/completions`
+      : params.backend === "gemini"
+      ? `${params.apiUrl}/chat/completions`
       : `${params.apiUrl}/v1/chat/completions`;
   const resp = await params.httpClient.request(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization:
-        params.backend === "openai" || params.backend === "ollama" || params.backend === "openrouter"
+        params.backend === "openai" || params.backend === "ollama" || params.backend === "openrouter" || params.backend === "gemini"
           ? `Bearer ${params.apiKey}`
           : params.apiKey,
     },

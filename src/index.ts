@@ -150,10 +150,11 @@ Usage:
   automaton --help         Show this help
 
 Environment (local mode — no Conway account needed):
-  OPENROUTER_API_KEY       OpenRouter key (recommended — one key, many real models)
+  GEMINI_API_KEY           Google AI Studio key (FREE: 1500 req/day, 1M context, no credit card — get at aistudio.google.com)
+  OLLAMA_BASE_URL          Ollama URL (DEFAULT: http://localhost:11434 — truly free, unlimited, no 402 ever)
+  OPENROUTER_API_KEY       OpenRouter key (smart models, but free credits limited)
   OPENAI_API_KEY           OpenAI key (or any OpenAI-compatible endpoint)
   ANTHROPIC_API_KEY        Anthropic key
-  OLLAMA_BASE_URL          Ollama base URL (e.g. http://localhost:11434)
   AUTOMATON_DASHBOARD_PORT Dashboard port (default 8787; set =0 to disable)
   CONWAY_API_URL           Conway API URL (only for Conway Cloud mode)
   CONWAY_API_KEY           Conway API key (enables Conway Cloud features)
@@ -290,16 +291,16 @@ async function run(): Promise<void> {
   // This lets the automaton run on Termux / standalone without a Conway account.
   const hasConwayKey = !!apiKey;
   const hasLocalInference =
-    !!config.openaiApiKey || !!config.anthropicApiKey || !!config.ollamaBaseUrl || !!config.openrouterApiKey ||
+    !!config.openaiApiKey || !!config.anthropicApiKey || !!config.ollamaBaseUrl || !!config.openrouterApiKey || !!config.geminiApiKey ||
     !!process.env.OPENAI_API_KEY || !!process.env.OLLAMA_BASE_URL || !!process.env.OPENROUTER_API_KEY ||
-    !!process.env.ANTHROPIC_API_KEY;
+    !!process.env.ANTHROPIC_API_KEY || !!process.env.GEMINI_API_KEY;
   const localMode = !hasConwayKey;
   if (localMode) {
     if (!hasLocalInference) {
       logger.error(
         "No Conway API key and no local inference provider found.\n" +
-          "  Set one of: OPENROUTER_API_KEY (recommended — one key, many models),\n" +
-          "  OPENAI_API_KEY, ANTHROPIC_API_KEY, OLLAMA_BASE_URL env vars,\n" +
+          "  Set one of: GEMINI_API_KEY (free — 1500 req/day, no credit card),\n" +
+          "  OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY env vars, or OLLAMA_BASE_URL (local, unlimited),\n" +
           "  or run the setup wizard to configure a provider. Run: automaton --provision",
       );
       process.exit(1);
@@ -420,6 +421,7 @@ async function run(): Promise<void> {
   // Resolve Ollama base URL: env var takes precedence over config
   const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || config.ollamaBaseUrl;
   const openrouterApiKey = process.env.OPENROUTER_API_KEY || config.openrouterApiKey;
+  const geminiApiKey = process.env.GEMINI_API_KEY || config.geminiApiKey;
 
   // Create inference client — pass a live registry lookup so model names like
   // "gpt-oss:120b" route to Ollama based on their registered provider, not heuristics.
@@ -435,6 +437,7 @@ async function run(): Promise<void> {
     anthropicApiKey: config.anthropicApiKey,
     ollamaBaseUrl,
     openrouterApiKey,
+    geminiApiKey,
     getModelProvider: (modelId) => modelRegistry.get(modelId)?.provider,
   });
 
@@ -443,6 +446,9 @@ async function run(): Promise<void> {
   }
   if (openrouterApiKey) {
     logger.info(`[${new Date().toISOString()}] OpenRouter backend: enabled (key ${openrouterApiKey.slice(0, 8)}...)`);
+  }
+  if (geminiApiKey) {
+    logger.info(`[${new Date().toISOString()}] Gemini (Google AI Studio) backend: enabled — free tier (1500 req/day, 1M context)`);
   }
 
   // Create social client (chain-aware: pass ChainIdentity for Solana signing)

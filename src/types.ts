@@ -55,6 +55,8 @@ export interface AutomatonConfig {
   ollamaBaseUrl?: string;
   /** OpenRouter API key (sk-or-...). One key reaches many real frontier models. */
   openrouterApiKey?: string;
+  /** Google AI Studio (Gemini) API key. Free tier: 1,500 req/day, 1M context, no credit card. */
+  geminiApiKey?: string;
   inferenceModel: string;
   /** Creator's EVM address where real USDC payments are routed (dashboard shows this as the payout address). */
   creatorPayoutAddress?: string;
@@ -84,7 +86,10 @@ export interface AutomatonConfig {
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
   conwayApiUrl: "https://api.conway.tech",
-  inferenceModel: "google/gemini-flash-1.5",
+  // Default to a LOCAL Ollama model — truly free, zero-cost, no 402 ever.
+  // qwen2.5:1.5b is small enough to run on a phone/PC. Run: ollama pull qwen2.5:1.5b
+  inferenceModel: "qwen2.5:1.5b",
+  ollamaBaseUrl: "http://localhost:11434",
   maxTokensPerTurn: 1024,
   heartbeatConfigPath: "~/.automaton/heartbeat.yml",
   dbPath: "~/.automaton/state.db",

@@ -3455,14 +3455,35 @@ function createInstalledToolExecutor(tool: {
 export function toolsToInferenceFormat(
   tools: AutomatonTool[],
 ): InferenceToolDefinition[] {
-  return tools.map((t) => ({
-    type: "function" as const,
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    },
-  }));
+  // Token-lean: truncate descriptions + strip per-parameter descriptions.
+  // Full tool docs aren't needed every turn — the model learns tools from the
+  // names + short descriptions + param types. This cuts ~60-70% of the tools
+  // schema token cost (the biggest source of per-turn bloat).
+  return tools.map((t) => {
+    // Strip "description" fields from nested parameter properties — the model
+    // infers usage from param names + types; per-param prose is pure bloat.
+    const leanParams = stripParamDescriptions(t.parameters);
+    return {
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: (t.description || "").slice(0, 90),
+        parameters: leanParams,
+      },
+    };
+  });
+}
+
+/** Recursively remove "description" keys from a JSON-schema-like object to save tokens. */
+function stripParamDescriptions(schema: any): any {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(stripParamDescriptions);
+  const out: any = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === "description") continue; // drop it
+    out[k] = stripParamDescriptions(v);
+  }
+  return out;
 }
 
 /**

@@ -26,29 +26,77 @@ npm run build
 node dist/index.js --run
 ```
 
-On first run, the runtime launches an interactive setup wizard — generates a wallet, asks for a name, genesis prompt, and creator address, lets you bring your own inference provider key (OpenAI / Anthropic / Ollama), then writes all config and starts the agent loop.
+On first run, the runtime launches an interactive setup wizard — generates a wallet, asks for a name, genesis prompt, and creator address, then writes all config and starts the agent loop. **The default brain is local Ollama (free, unlimited, no token errors)** — just install Ollama + pull `qwen2.5:1.5b` (see below). No API key required.
 
 ### Set an inference provider
 
-The automaton needs a model to think. In local mode, set one before first run:
+The automaton needs a model to think. **The default is local Ollama — truly free, zero-cost, no 402 ever.** No API key, no credits, no token limits. It runs the model on your own hardware (Termux or a PC).
+
+### Option A (default): Local Ollama — free, unlimited, no 402 ever
+
+Install Ollama and pull a small model that fits a phone/PC:
 
 ```bash
-# Option A (recommended for Termux): OpenRouter — one key, many real frontier models
-#   (Claude, GPT-5, Llama 70B, etc.) with no local compute. Get a key at
-#   https://openrouter.ai/keys
-export OPENROUTER_API_KEY=sk-or-...
-# Then set the model to a vendor/model slug in ~/.automaton/automaton.json, e.g.:
-#   "inferenceModel": "anthropic/claude-3.5-sonnet"
+# ── On Termux (Android) ──
+pkg install ollama          # or: curl -fsSL https://ollama.com/install.sh | sh (proot)
+ollama serve &              # start the server (background)
+ollama pull qwen2.5:1.5b    # small model (~1GB) — runs on a phone, no token limits
+
+# ── On a PC/laptop (much faster) ──
+# install from https://ollama.com, then:
+ollama serve &
+ollama pull qwen2.5:1.5b    # or llama3.2:1b, or a bigger model if you have RAM
+
+# That's it. The agent defaults to http://localhost:11434 + qwen2.5:1.5b.
+# No env vars needed. Run:
+node dist/index.js --run
+```
+
+> If Ollama is on a different machine (e.g. your PC, agent on phone):
+> `export OLLAMA_BASE_URL=http://192.168.x.x:11434`
+
+> **Why this is the zero-cost default:** the model runs on YOUR CPU/GPU. There's
+> no per-token billing, no credit balance, no 402. It's slower and not as smart
+> as a frontier cloud model, but it's genuinely free and uncapped — the agent
+> can think forever without hitting a paywall.
+
+### Option B: Google AI Studio / Gemini (FREE, smart, 1M context — no credit card)
+
+```bash
+# Get a free key at https://aistudio.google.com (no billing needed)
+export GEMINI_API_KEY=AIza...
+# Set the model to a Gemini model in ~/.automaton/automaton.json:
+#   "inferenceModel": "gemini-2.0-flash"     # 1500 req/day, 15 RPM, 1M context
+#   "inferenceModel": "gemini-2.0-flash-lite" # 1500 req/day, 30 RPM (faster, dumber)
+node dist/index.js --run
+```
+
+> **Why Gemini is the best free cloud brain:** 1,500 requests/day, 1M-token context
+> window (basically never 402s on prompt size), no credit card, legitimately free for
+> developers. Smart and fast. Rate-limited per minute/day (not per-token-purchased), so
+> you won't hit the credit 402s OpenRouter gives. If you exceed 1500/day it rate-limits
+> (429), not 402s — and the agent's retry handles that.
+
+### Option C: OpenRouter (smart frontier models — but free credits are limited)
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...   # get one at https://openrouter.ai/keys
+# Set the model to a vendor/model slug in ~/.automaton/automaton.json:
 #   "inferenceModel": "meta-llama/llama-3.3-70b-instruct"
+node dist/index.js --run
+```
 
-# Option B: OpenAI (or any OpenAI-compatible endpoint)
-export OPENAI_API_KEY=sk-...
+> OpenRouter gives a smart brain (Claude, GPT, Llama 70B) with no local compute,
+> but free credits are limited (~2–3k tokens) and you'll hit 402s. This build
+> handles 402s gracefully (halves output + trims context + retries), but for
+> the best free cloud experience use Gemini (Option B) or for zero-cost-unlimited
+> use local Ollama (Option A).
 
-# Option C: Local Ollama server (install Ollama on a host, or a remote box)
-export OLLAMA_BASE_URL=http://localhost:11434
+### Option D: OpenAI / Anthropic (paid)
 
-# Option D: Anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
+```bash
+export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY=sk-ant-...
+node dist/index.js --run
 ```
 
 Then run:
@@ -56,21 +104,6 @@ Then run:
 ```bash
 node dist/index.js --run
 ```
-
-> **Why OpenRouter is recommended for Termux:** running a frontier model locally
-> on a phone via Ollama is slow and memory-starved, and separate OpenAI/Anthropic
-> keys each only reach one vendor. OpenRouter gives you one key to reach real
-> frontier models from Termux with no local compute — the agent's "brain" runs
-> on a real model, not a mock.
-
-> **OpenRouter credits note:** free OpenRouter credits are limited (often enough
-> for only ~2,000–3,000 output tokens per call). This build handles that
-> gracefully: the default output budget per turn is 1,024 tokens (not 8,192),
-> every request is clamped to your `maxTokensPerTurn` config cap, and if a call
-> still 402s the agent automatically halves the budget and retries until it fits
-> what your credits can afford. To avoid 402s entirely, either upgrade your
-> OpenRouter account or set `inferenceModel` to a cheaper model + lower
-> `maxTokensPerTurn` in `~/.automaton/automaton.json`.
 
 ---
 
